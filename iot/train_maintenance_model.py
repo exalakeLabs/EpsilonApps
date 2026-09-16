@@ -72,6 +72,7 @@ OUTCOME_TABLE = f"{NAMESPACE}.maintenance_prediction_outcomes"
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Validate inputs
 
@@ -115,6 +116,7 @@ FEATURE_COLUMNS = [
 LABEL_COLUMN = "label_failure_within_horizon"
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Build point-in-time feature snapshots
 
@@ -316,6 +318,7 @@ if WRITE_FEATURE_SNAPSHOTS:
 display(feature_snapshots.groupBy("dataset_split", LABEL_COLUMN).count().orderBy("dataset_split", LABEL_COLUMN))
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Create chronological local training sets
 
@@ -358,6 +361,7 @@ scale_pos_weight = negative_count / max(1, positive_count)
 print(f"Training rows={len(y_train):,}, positives={positive_count:,}, scale_pos_weight={scale_pos_weight:.2f}")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Train, evaluate, and register XGBoost
 
@@ -423,6 +427,7 @@ print(f"Registered {REGISTERED_MODEL_NAME} from MLflow run {run_id}")
 display(spark.createDataFrame([(name, float(value)) for name, value in metrics.items()], "metric string, value double"))
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Batch inference for the latest asset snapshots
 
@@ -473,6 +478,7 @@ if WRITE_BATCH_PREDICTIONS:
     print(f"Wrote batch predictions from MLflow run {run_id}")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Evaluate predictions whose horizons have closed
 
