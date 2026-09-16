@@ -90,6 +90,25 @@ than `FORECAST_HORIZON_HOURS / 24`; 30 to 90 days is a practical minimum for
 chronological training and evaluation. Set it to `0` only for a live,
 forward-moving append workload that is not expected to train a model yet.
 
+The generator builds the failure schedule before producing telemetry and
+injects progressive degradation during the 72 hours preceding each failure.
+As failure time approaches, temperature rises, CPU load increases, periodic
+high-load cycles become more frequent, and network latency rises nonlinearly.
+The exact window and maximum increases are controlled by:
+
+```python
+PRE_FAILURE_BEHAVIOR_HOURS = 72
+MAX_PRE_FAILURE_TEMPERATURE_RISE = 30.0
+MAX_PRE_FAILURE_CPU_RISE = 45.0
+MAX_PRE_FAILURE_LATENCY_RISE = 300.0
+```
+
+The failure rows written to `machine_failures` come from that same schedule,
+so the anomalies are genuine leading signals rather than unrelated random
+spikes. Vibration is not injected because `iot_sample_data` does not currently
+contain a vibration measure; network latency and abnormal CPU duty cycles are
+used as the additional degradation signals.
+
 For a smoke test, use:
 
 ```python

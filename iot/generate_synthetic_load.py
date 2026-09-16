@@ -41,6 +41,12 @@ COMPONENTS_PER_ASSET = 6
 FAILURE_MODE_COUNT = 40
 EVENT_TIME_SPAN_DAYS = 90  # Spread each machine's readings over this history.
 LIVE_EVENT_INTERVAL_SECONDS = 30  # Used only when EVENT_TIME_SPAN_DAYS is 0.
+# Inject progressive degradation during this period before each generated
+# failure. The model's 168-hour horizon can then learn a genuine leading signal.
+PRE_FAILURE_BEHAVIOR_HOURS = 72
+MAX_PRE_FAILURE_TEMPERATURE_RISE = 30.0
+MAX_PRE_FAILURE_CPU_RISE = 45.0
+MAX_PRE_FAILURE_LATENCY_RISE = 300.0
 SEED = 42
 
 # Historical mode ends at the current UTC time. Set EVENT_TIME_SPAN_DAYS to 0
@@ -60,6 +66,7 @@ assert ROOMS_PER_SITE > 0
 assert HARDWARE_CONFIG_COUNT > 0
 assert EVENT_TIME_SPAN_DAYS >= 0
 assert LIVE_EVENT_INTERVAL_SECONDS > 0
+assert PRE_FAILURE_BEHAVIOR_HOURS > 0
 
 TELEMETRY_FQN = f"{CATALOG}.{SCHEMA}.{TELEMETRY_TABLE}"
 FAILURE_FQN = f"{CATALOG}.{SCHEMA}.{FAILURE_TABLE}"
@@ -71,6 +78,7 @@ EVENT_STEP_SECONDS = (
     if EVENT_TIME_SPAN_DAYS > 0
     else LIVE_EVENT_INTERVAL_SECONDS
 )
+PRE_FAILURE_BEHAVIOR_SECONDS = PRE_FAILURE_BEHAVIOR_HOURS * 3_600
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 
 # COMMAND ----------
@@ -136,6 +144,43 @@ def positive_hash(*columns):
     return F.pmod(F.xxhash64(*columns, F.lit(SEED)), F.lit(2_147_483_647))
 
 
+def failure_event_batch(row_count):
+    if row_count == 0:
+        return None
+
+    failure_window_seconds = SAMPLES_PER_MACHINE * EVENT_STEP_SECONDS
+    base = spark.range(row_count, numPartitions=min(OUTPUT_PARTITIONS, row_count))
+    failure_hash = positive_hash(F.col("id"), F.lit("failure"))
+    failure_time_hash = positive_hash(F.col("id"), F.lit("failure_time"))
+
+    return base.select(
+        F.col("id"),
+        failure_hash.alias("failure_hash"),
+        (F.pmod(failure_hash, F.lit(MACHINE_COUNT)) + 1)
+        .cast("int")
+        .alias("machine_id"),
+        F.timestamp_seconds(
+            F.lit(RUN_START_EPOCH_SECONDS)
+            + F.pmod(failure_time_hash, F.lit(failure_window_seconds))
+        ).alias("failure_time"),
+    )
+
+
+# Build one failure plan and reuse it for both telemetry degradation and the
+# canonical failure tables. Collecting timestamps into a per-machine array
+# avoids duplicating telemetry rows when a machine has multiple failures.
+failure_batch = failure_event_batch(FAILURE_ROWS)
+if failure_batch is not None:
+    failure_batch = failure_batch.cache()
+    failure_schedule_by_machine = (
+        failure_batch.groupBy("machine_id")
+        .agg(F.collect_list(F.unix_timestamp("failure_time")).alias("failure_epochs"))
+        .cache()
+    )
+else:
+    failure_schedule_by_machine = None
+
+
 def telemetry_batch(batch_start, batch_rows):
     """Build one distributed telemetry batch without driver-side row creation."""
     base = (
@@ -153,15 +198,43 @@ def telemetry_batch(batch_start, batch_rows):
             "site_id",
             (F.pmod(F.col("machine_id") - 1, F.lit(SITE_COUNT)) + 1).cast("int"),
         )
+        .withColumn(
+            "event_epoch",
+            F.lit(RUN_START_EPOCH_SECONDS)
+            + F.col("sample_sequence") * F.lit(EVENT_STEP_SECONDS),
+        )
+        .withColumn("event_time", F.timestamp_seconds("event_epoch"))
     )
+
+    if failure_schedule_by_machine is not None:
+        base = (
+            base.join(F.broadcast(failure_schedule_by_machine), "machine_id", "left")
+            .withColumn(
+                "seconds_to_failure",
+                F.expr(
+                    "array_min(filter(transform(failure_epochs, "
+                    "x -> x - event_epoch), "
+                    f"x -> x >= 0 AND x <= {PRE_FAILURE_BEHAVIOR_SECONDS}))"
+                ),
+            )
+        )
+    else:
+        base = base.withColumn("seconds_to_failure", F.lit(None).cast("long"))
+
+    degradation = F.when(
+        F.col("seconds_to_failure").isNotNull(),
+        1.0 - F.col("seconds_to_failure") / F.lit(PRE_FAILURE_BEHAVIOR_SECONDS),
+    ).otherwise(0.0)
+    # Periodic load surges approximate increasingly abnormal duty cycles as the
+    # asset approaches failure, without adding a new telemetry column.
+    abnormal_cycle = F.when(
+        (degradation > 0) & (F.pmod(F.col("sample_sequence"), F.lit(3)) == 0),
+        degradation * 15.0,
+    ).otherwise(0.0)
 
     machine_hash = positive_hash(F.col("machine_id"))
     reading_hash = positive_hash(F.col("machine_id"), F.col("sample_sequence"))
     site_hash = positive_hash(F.col("site_id"))
-    event_epoch = (
-        F.lit(RUN_START_EPOCH_SECONDS)
-        + F.col("sample_sequence") * F.lit(EVENT_STEP_SECONDS)
-    )
     daily_phase = F.col("sample_sequence") * F.lit(
         EVENT_STEP_SECONDS * 2.0 * 3.141592653589793 / 86_400.0
     )
@@ -195,18 +268,23 @@ def telemetry_batch(batch_start, batch_rows):
             + F.sin(daily_phase) * 6.0
             + (F.pmod(reading_hash, F.lit(1_000)).cast("double") / 100.0 - 5.0)
             + F.when(F.pmod(reading_hash, F.lit(2_000)) == 0, 35.0).otherwise(0.0)
+            + degradation * F.lit(MAX_PRE_FAILURE_TEMPERATURE_RISE)
         ).cast("double").alias("temperature"),
         F.least(
             F.lit(100.0),
             (
                 F.pmod(reading_hash, F.lit(8_500)).cast("double") / 100.0
                 + F.when(F.pmod(reading_hash, F.lit(500)) == 0, 25.0).otherwise(0.0)
+                + degradation * F.lit(MAX_PRE_FAILURE_CPU_RISE)
+                + abnormal_cycle
             ),
         ).cast("double").alias("cpu_load"),
         (
             F.lit(2.0)
             + F.pmod(F.floor(reading_hash / 11), F.lit(9_800)).cast("double") / 100.0
             + F.when(F.pmod(reading_hash, F.lit(1_000)) == 0, 250.0).otherwise(0.0)
+            + F.pow(degradation, 2.0) * F.lit(MAX_PRE_FAILURE_LATENCY_RISE)
+            + abnormal_cycle * 2.0
         ).cast("double").alias("network_latency"),
         (F.pmod(F.col("machine_id") - 1, F.lit(RACKS_PER_SITE)) + 1)
         .cast("int")
@@ -217,7 +295,7 @@ def telemetry_batch(batch_start, batch_rows):
         (F.pmod(machine_hash, F.lit(HARDWARE_CONFIG_COUNT)) + 1)
         .cast("int")
         .alias("hardware_configuration_id"),
-        F.timestamp_seconds(event_epoch).alias("event_time"),
+        F.col("event_time"),
     )
 
 
@@ -251,36 +329,7 @@ print(f"Appended {telemetry_written:,} telemetry rows in {batch_number} batches"
 # COMMAND ----------
 
 
-def failure_event_batch(row_count):
-    if row_count == 0:
-        return None
-
-    # Spread failures across the same time horizon as the telemetry run. A
-    # machine may fail more than once, which is useful for event-heavy tests.
-    failure_window_seconds = SAMPLES_PER_MACHINE * EVENT_STEP_SECONDS
-    base = spark.range(row_count, numPartitions=min(OUTPUT_PARTITIONS, row_count))
-    failure_hash = positive_hash(F.col("id"), F.lit("failure"))
-    failure_time_hash = positive_hash(F.col("id"), F.lit("failure_time"))
-
-    return base.select(
-        F.col("id"),
-        failure_hash.alias("failure_hash"),
-        (F.pmod(failure_hash, F.lit(MACHINE_COUNT)) + 1)
-        .cast("int")
-        .alias("machine_id"),
-        F.timestamp_seconds(
-            F.lit(RUN_START_EPOCH_SECONDS)
-            + F.pmod(
-                failure_time_hash,
-                F.lit(failure_window_seconds),
-            )
-        ).alias("failure_time"),
-    )
-
-
-failure_batch = failure_event_batch(FAILURE_ROWS)
 if failure_batch is not None:
-    failure_batch = failure_batch.cache()
     (
         failure_batch.select("machine_id", "failure_time")
         .write.format("delta")
@@ -315,6 +364,7 @@ if failure_batch is not None:
         .mode("append")
         .saveAsTable(ENRICHED_FAILURE_FQN)
     )
+    failure_schedule_by_machine.unpersist()
     failure_batch.unpersist()
 print(f"Appended {FAILURE_ROWS:,} machine-failure rows")
 
