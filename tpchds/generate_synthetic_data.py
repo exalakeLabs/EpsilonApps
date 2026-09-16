@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # TPC-DS-like synthetic data generator
 # MAGIC
@@ -30,6 +34,7 @@ NAMESPACE = f"`{CATALOG}`.`{SCHEMA}`" if CATALOG else f"`{SCHEMA}`"
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {NAMESPACE}")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Model and scale
 
@@ -76,6 +81,7 @@ SIZES = {
 }
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Deterministic expression generator
 
@@ -151,6 +157,7 @@ def write_table(table_name, df, partition_columns=None):
     print(f"Wrote {table_name}")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Date and time dimensions
 
@@ -192,6 +199,7 @@ times = spark.range(SIZES["time_dim"]).select(
 write_table("time_dim", times)
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Remaining dimensions
 
@@ -201,6 +209,7 @@ for table_name, schema_spec in SCHEMAS.items():
     write_table(table_name, table_df(table_name, SIZES[table_name], schema_spec))
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Facts, returns, and inventory
 
@@ -225,6 +234,7 @@ for table_name, row_count in fact_sizes.items():
     write_table(table_name, df)
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Validation summary
 
