@@ -13,8 +13,8 @@
 from pyspark.sql import functions as F
 
 # Configuration constants. Edit these values before running the notebook.
-CATALOG = ""                 # Blank uses the current catalog.
-SCHEMA = "tpchds"            # Target schema.
+CATALOG = "exalabs"                 # Blank uses the current catalog.
+SCHEMA = "apps_tpchds"            # Target schema.
 SALES_ROWS = 100_000_000      # Total across store, catalog, and web sales.
 INVENTORY_ROWS = 5_000_000
 SEED = 42
