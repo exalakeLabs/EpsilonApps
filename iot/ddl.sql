@@ -220,6 +220,7 @@ USING DELTA;
 CREATE TABLE IF NOT EXISTS exalabs.iot.maintenance_predictions (
   prediction_id BIGINT NOT NULL,
   asset_id INT NOT NULL,
+  feature_time TIMESTAMP NOT NULL,
   prediction_time TIMESTAMP NOT NULL,
   model_name STRING NOT NULL,
   model_version STRING NOT NULL,
@@ -229,8 +230,54 @@ CREATE TABLE IF NOT EXISTS exalabs.iot.maintenance_predictions (
   remaining_useful_life_hours DOUBLE,
   risk_level STRING,
   recommended_action STRING,
-  actual_failure_machine_id INT,
-  actual_failure_time TIMESTAMP)
+  threshold_used DOUBLE,
+  prediction_status STRING,
+  scored_at TIMESTAMP)
+USING DELTA;
+
+CREATE TABLE IF NOT EXISTS exalabs.iot.asset_feature_snapshots (
+  snapshot_id STRING NOT NULL,
+  asset_id INT NOT NULL,
+  feature_time TIMESTAMP NOT NULL,
+  window_start TIMESTAMP NOT NULL,
+  window_end TIMESTAMP NOT NULL,
+  telemetry_count BIGINT,
+  temperature_mean DOUBLE,
+  temperature_stddev DOUBLE,
+  temperature_min DOUBLE,
+  temperature_max DOUBLE,
+  temperature_slope DOUBLE,
+  cpu_mean DOUBLE,
+  cpu_p95 DOUBLE,
+  cpu_max DOUBLE,
+  latency_mean DOUBLE,
+  latency_p95 DOUBLE,
+  latency_max DOUBLE,
+  temperature_spike_count BIGINT,
+  cpu_spike_count BIGINT,
+  latency_spike_count BIGINT,
+  operating_hours DOUBLE,
+  hours_since_maintenance DOUBLE,
+  failures_last_90d BIGINT,
+  asset_type_id INT,
+  asset_model_id INT,
+  hardware_configuration_id INT,
+  label_failure_within_horizon INT,
+  label_failure_time TIMESTAMP,
+  forecast_horizon_hours INT,
+  dataset_split STRING,
+  generated_at TIMESTAMP)
+USING DELTA;
+
+CREATE TABLE IF NOT EXISTS exalabs.iot.maintenance_prediction_outcomes (
+  prediction_id BIGINT NOT NULL,
+  evaluated_at TIMESTAMP NOT NULL,
+  horizon_end TIMESTAMP NOT NULL,
+  failure_observed BOOLEAN NOT NULL,
+  actual_machine_id INT,
+  actual_failure_time TIMESTAMP,
+  lead_time_hours DOUBLE,
+  outcome_class STRING NOT NULL)
 USING DELTA;
 
 CREATE TABLE IF NOT EXISTS exalabs.iot.machine_failures (

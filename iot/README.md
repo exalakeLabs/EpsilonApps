@@ -9,9 +9,10 @@ load testing and reliability analytics such as MTBF, MTTR, and availability.
 
 | File | Purpose |
 | --- | --- |
-| `ddl.sql` | Creates the schema and all 19 telemetry, asset, maintenance, reliability, and prediction tables. |
+| `ddl.sql` | Creates the schema and all 21 telemetry, asset, maintenance, feature, prediction, and outcome tables. |
 | `generate_maintenance_data.py` | Creates a consistent historical baseline for the maintenance model. |
 | `generate_synthetic_load.py` | Repeatedly appends telemetry and new failure events for load testing. |
+| `train_maintenance_model.py` | Builds point-in-time features, trains and registers XGBoost, scores assets, and evaluates mature predictions. |
 
 ## Main entities
 
@@ -22,7 +23,8 @@ load testing and reliability analytics such as MTBF, MTTR, and availability.
 - Reliability: `machine_failures`, `failure_details`, and `failure_modes`
 - Maintenance: `work_orders`, `maintenance_actions`, and `work_order_parts`
 - Utilization: `asset_state_events` and `meter_readings`
-- Model output: `maintenance_predictions`
+- Machine learning: `asset_feature_snapshots`, `maintenance_predictions`, and
+  `maintenance_prediction_outcomes`
 - Telemetry: `iot_sample_data`
 
 `iot_sample_data` is the primary measurement fact and retains the collected
@@ -40,12 +42,14 @@ keys from the same generated fleet.
 1. Confirm that the `exalabs` catalog exists and that the execution identity
    can create schemas and managed Delta tables in it.
 2. Run `ddl.sql` in Databricks SQL. It creates the `exalabs.iot` schema and all
-   19 Delta tables, including the original telemetry and failure tables.
+   21 Delta tables, including the original telemetry and failure tables.
 3. Open `generate_maintenance_data.py` as a Databricks source notebook, attach
    multi-worker Spark compute, review its constants, and run all cells.
 4. Open `generate_synthetic_load.py`, configure the desired append workload,
    and run all cells. Run it again whenever another telemetry window and set
    of operational failures is needed.
+5. Use a Databricks ML Runtime with XGBoost, scikit-learn, pandas, and MLflow.
+   Open `train_maintenance_model.py`, review its constants, and run all cells.
 
 Run the baseline generator before the append generator. It replaces generated
 dimension and maintenance-history tables, but it does not overwrite collected
@@ -64,7 +68,6 @@ The default baseline represents:
 - 250,000 historical failures and 350,000 work orders
 - 700,000 maintenance actions and 250,000 part-usage records
 - 2 million state intervals and 1 million meter readings
-- 1 million predictive-maintenance results
 
 The baseline is deterministic for a given `SEED`. Change the constants at the
 top of `generate_maintenance_data.py` to alter fleet size or history volume.
@@ -93,6 +96,38 @@ Smaller telemetry batches create more Delta commits and are useful for testing
 transaction-log growth and concurrent readers. Larger batches reduce commit
 overhead. Set `OUTPUT_PARTITIONS` in proportion to available Spark cores and
 reduce it for small runs to avoid creating many small files.
+
+## Model training and inference
+
+`train_maintenance_model.py` predicts whether an asset will fail during the
+next 168 hours. It performs the following workflow:
+
+1. Aggregates the primary measures in `iot_sample_data` into hourly,
+   point-in-time feature snapshots.
+2. Adds operating hours, recent failure counts, time since maintenance, asset
+   type, asset model, and hardware configuration without using future data.
+3. Labels snapshots from future events in `machine_failures`. Snapshots whose
+   forecast horizons have not closed remain unlabeled and are inference-only.
+4. Splits labeled observations chronologically into training, validation, and
+   test periods.
+5. Trains an imbalance-aware `XGBClassifier`, chooses an alert threshold on
+   the validation period, and evaluates ROC AUC, PR AUC, precision, recall,
+   calibration, and the confusion matrix on the test period.
+6. Logs the run and registers the model in Unity Catalog through MLflow.
+7. Scores the latest snapshot for every asset and appends the results to
+   `maintenance_predictions`.
+8. Writes delayed ground-truth evaluation to
+   `maintenance_prediction_outcomes` after prediction horizons close.
+
+The synthetic generators do not populate `maintenance_predictions`.
+Predictions in that table are model inference results. Synthetic telemetry and
+failure history are still useful for pipeline, model-training, UI, and load
+tests, but synthetic model quality should not be treated as evidence of real
+predictive performance.
+
+At least two historical feature windows with closed 168-hour horizons are
+required. For meaningful chronological train, validation, and test periods,
+load telemetry spanning substantially more than seven days.
 
 ## Example reliability queries
 
@@ -141,13 +176,14 @@ Prediction outcome analysis:
 
 ```sql
 SELECT
-  risk_level,
-  COUNT(*) AS predictions,
-  COUNT(actual_failure_time) AS observed_failures,
-  COUNT(actual_failure_time) / COUNT(*) AS observed_failure_rate,
-  AVG(failure_probability) AS mean_predicted_probability
-FROM exalabs.iot.maintenance_predictions
-GROUP BY risk_level
+  p.risk_level,
+  COUNT(*) AS evaluated_predictions,
+  COUNT_IF(o.failure_observed) AS observed_failures,
+  AVG(p.failure_probability) AS mean_predicted_probability,
+  AVG(CASE WHEN o.failure_observed THEN 1.0 ELSE 0.0 END) AS observed_failure_rate
+FROM exalabs.iot.maintenance_predictions AS p
+JOIN exalabs.iot.maintenance_prediction_outcomes AS o USING (prediction_id)
+GROUP BY p.risk_level
 ORDER BY mean_predicted_probability DESC;
 ```
 

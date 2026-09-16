@@ -39,7 +39,6 @@ FAILURE_COUNT = 250_000
 PREVENTIVE_WORK_ORDER_COUNT = 100_000
 STATE_EVENTS_PER_ASSET = 20
 METER_READINGS_PER_ASSET = 10
-PREDICTIONS_PER_ASSET = 10
 
 HISTORY_START = datetime(2023, 1, 1, tzinfo=timezone.utc)
 HISTORY_DAYS = 1_095
@@ -60,7 +59,6 @@ FAILURE_MODE_COUNT = ASSET_TYPE_COUNT * FAILURE_MODES_PER_ASSET_TYPE
 WORK_ORDER_COUNT = FAILURE_COUNT + PREVENTIVE_WORK_ORDER_COUNT
 STATE_EVENT_COUNT = ASSET_COUNT * STATE_EVENTS_PER_ASSET
 METER_READING_COUNT = ASSET_COUNT * METER_READINGS_PER_ASSET
-PREDICTION_COUNT = ASSET_COUNT * PREDICTIONS_PER_ASSET
 
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 
@@ -76,7 +74,8 @@ TARGET_TABLES = [
     "part_catalog", "asset_components", "sensor_types", "sensors",
     "failure_modes", "failure_details", "work_orders", "maintenance_actions",
     "work_order_parts", "asset_state_events", "meter_readings",
-    "maintenance_predictions", "machine_failures",
+    "maintenance_predictions", "asset_feature_snapshots",
+    "maintenance_prediction_outcomes", "machine_failures",
 ]
 
 
@@ -111,7 +110,6 @@ COMPONENT_COUNT = ASSET_COUNT * COMPONENTS_PER_ASSET
 SENSOR_COUNT = ASSET_COUNT * SENSORS_PER_ASSET
 STATE_EVENT_COUNT = ASSET_COUNT * STATE_EVENTS_PER_ASSET
 METER_READING_COUNT = ASSET_COUNT * METER_READINGS_PER_ASSET
-PREDICTION_COUNT = ASSET_COUNT * PREDICTIONS_PER_ASSET
 print(f"Generating asset coverage through machine_id {ASSET_COUNT:,}")
 
 
@@ -455,7 +453,7 @@ record_write("work_order_parts", work_order_parts, FAILURE_COUNT)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Operating history and predictive-maintenance outputs
+# MAGIC ## Operating history
 
 # COMMAND ----------
 
@@ -483,31 +481,6 @@ meters = meters_base.select(
     ((F.pmod(F.col("id"), F.lit(METER_READINGS_PER_ASSET)) + 1) * 500 + F.pmod(F.col("meter_hash"), F.lit(100))).cast("bigint").alias("starts_count"),
 )
 record_write("meter_readings", meters, METER_READING_COUNT)
-
-predictions_base = (
-    spark.range(PREDICTION_COUNT)
-    .withColumn("prediction_hash", stable_hash(F.col("id"), F.lit("prediction")))
-    .withColumn("has_failure", F.pmod(F.col("id"), F.lit(10)) == 0)
-    .withColumn("actual_failure_zero", F.pmod(F.col("id"), F.lit(FAILURE_COUNT)))
-    .withColumn("actual_failure_hash", stable_hash(F.col("actual_failure_zero"), F.lit("failure")))
-    .withColumn("asset_id", F.when(F.col("has_failure"), integer_key(F.col("actual_failure_hash"), ASSET_COUNT)).otherwise(integer_key(F.col("prediction_hash"), ASSET_COUNT)))
-    .withColumn("asset_model_id", integer_key(stable_hash(F.col("asset_id") - 1), ASSET_MODEL_COUNT))
-    .withColumn("asset_type_id", (F.pmod(F.col("asset_model_id") - 1, F.lit(ASSET_TYPE_COUNT)) + 1).cast("int"))
-    .withColumn("actual_failure_mode_id", (((F.col("asset_type_id") - 1) * FAILURE_MODES_PER_ASSET_TYPE) + F.pmod(F.floor(F.col("actual_failure_hash") / 7), F.lit(FAILURE_MODES_PER_ASSET_TYPE)) + 1).cast("int"))
-    .withColumn("failure_probability", F.when(F.col("has_failure"), 0.65 + F.pmod(F.col("prediction_hash"), F.lit(3500)) / 10_000.0).otherwise(F.pmod(F.col("prediction_hash"), F.lit(5_000)) / 10_000.0))
-)
-predictions = predictions_base.select(
-    (F.col("id") + 1).cast("bigint").alias("prediction_id"), F.col("asset_id"),
-    F.when(F.col("has_failure"), random_history_timestamp(F.col("actual_failure_hash")) - F.expr("INTERVAL 24 HOURS")).otherwise(random_history_timestamp(F.col("prediction_hash"))).alias("prediction_time"), F.lit("asset_failure_risk").alias("model_name"),
-    F.lit("1.0.0").alias("model_version"), F.lit(168).cast("int").alias("forecast_horizon_hours"),
-    F.col("failure_probability").cast("double"), F.when(F.col("has_failure"), F.col("actual_failure_mode_id")).otherwise(integer_key(F.floor(F.col("prediction_hash") / 5), FAILURE_MODE_COUNT)).cast("int").alias("predicted_failure_mode_id"),
-    ((1.0 - F.col("failure_probability")) * 8_760.0).alias("remaining_useful_life_hours"),
-    F.when(F.col("failure_probability") >= 0.8, "critical").when(F.col("failure_probability") >= 0.6, "high").when(F.col("failure_probability") >= 0.3, "medium").otherwise("low").alias("risk_level"),
-    F.when(F.col("failure_probability") >= 0.8, "stop_and_inspect").when(F.col("failure_probability") >= 0.6, "schedule_maintenance").otherwise("continue_monitoring").alias("recommended_action"),
-    F.when(F.col("has_failure"), F.col("asset_id")).cast("int").alias("actual_failure_machine_id"),
-    F.when(F.col("has_failure"), random_history_timestamp(F.col("actual_failure_hash"))).cast("timestamp").alias("actual_failure_time"),
-)
-record_write("maintenance_predictions", predictions, PREDICTION_COUNT)
 
 # COMMAND ----------
 
