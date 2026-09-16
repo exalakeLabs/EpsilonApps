@@ -61,6 +61,7 @@ RUN_START_EPOCH_SECONDS = int(RUN_START.timestamp())
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Validate the target model
 
@@ -111,6 +112,7 @@ validate_table(ENRICHED_FAILURE_FQN, EXPECTED_ENRICHED_FAILURE_COLUMNS)
 print(f"Validated {TELEMETRY_FQN}, {FAILURE_FQN}, and {ENRICHED_FAILURE_FQN}")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Synthetic telemetry
 
@@ -229,6 +231,7 @@ while telemetry_written < TOTAL_TELEMETRY_ROWS:
 print(f"Appended {telemetry_written:,} telemetry rows in {batch_number} batches")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Machine failures
 
@@ -305,6 +308,7 @@ if failure_batch is not None:
 print(f"Appended {FAILURE_ROWS:,} machine-failure rows")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Run summary
 

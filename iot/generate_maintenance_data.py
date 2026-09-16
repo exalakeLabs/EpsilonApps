@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Asset and maintenance history generator
 # MAGIC
@@ -61,6 +65,7 @@ PREDICTION_COUNT = ASSET_COUNT * PREDICTIONS_PER_ASSET
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Helpers and target validation
 
@@ -170,6 +175,7 @@ def record_write(name, dataframe, row_count):
     results.append((name, row_count))
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Organization, sites, and asset catalog
 
@@ -254,6 +260,7 @@ assets = assets_base.select(
 record_write("assets", assets, ASSET_COUNT)
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Parts, installed components, and sensors
 
@@ -313,6 +320,7 @@ sensors = sensors_base.select(
 record_write("sensors", sensors, SENSOR_COUNT)
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Failures and maintenance execution
 
@@ -445,6 +453,7 @@ work_order_parts = work_order_parts_base.select(
 record_write("work_order_parts", work_order_parts, FAILURE_COUNT)
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Operating history and predictive-maintenance outputs
 
@@ -501,6 +510,7 @@ predictions = predictions_base.select(
 record_write("maintenance_predictions", predictions, PREDICTION_COUNT)
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Generation summary
 
