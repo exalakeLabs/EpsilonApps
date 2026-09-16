@@ -137,6 +137,15 @@ failure history are still useful for pipeline, model-training, UI, and load
 tests, but synthetic model quality should not be treated as evidence of real
 predictive performance.
 
+The training notebook sets
+`RECREATE_ML_OUTPUT_TABLES_ON_SCHEMA_MISMATCH = True` by default. If an older
+`maintenance_predictions` layout already exists, it replaces that table and
+`maintenance_prediction_outcomes` with the current model-output schemas. This
+deletes only prior model predictions and outcomes; it does not modify
+telemetry, failures, feature snapshots, assets, or maintenance history. Set the
+constant to `False` when model-output retention is required and perform a
+controlled schema migration instead.
+
 At least two historical feature windows with closed 168-hour horizons are
 required. For meaningful chronological train, validation, and test periods,
 load telemetry and failure events spanning substantially more than seven days.

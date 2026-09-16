@@ -46,6 +46,10 @@ DEFAULT_ALERT_THRESHOLD = 0.65
 WRITE_FEATURE_SNAPSHOTS = True
 WRITE_BATCH_PREDICTIONS = True
 EVALUATE_MATURE_PREDICTIONS = True
+# Model outputs are reproducible. When True, an obsolete prediction schema is
+# replaced automatically, along with its dependent outcome table. Telemetry,
+# failures, features, and maintenance history are never removed by this option.
+RECREATE_ML_OUTPUT_TABLES_ON_SCHEMA_MISMATCH = True
 
 # XGBoost parameters. The class imbalance weight is calculated from training data.
 XGB_PARAMS = {
@@ -88,6 +92,78 @@ if missing:
 
 if FEATURE_WINDOW_HOURS <= 0 or FORECAST_HORIZON_HOURS <= 0:
     raise ValueError("Feature and forecast windows must be positive")
+
+EXPECTED_PREDICTION_COLUMNS = [
+    "prediction_id", "asset_id", "feature_time", "prediction_time",
+    "model_name", "model_version", "forecast_horizon_hours",
+    "failure_probability", "predicted_failure_mode_id",
+    "remaining_useful_life_hours", "risk_level", "recommended_action",
+    "threshold_used", "prediction_status", "scored_at",
+]
+EXPECTED_OUTCOME_COLUMNS = [
+    "prediction_id", "evaluated_at", "horizon_end", "failure_observed",
+    "actual_machine_id", "actual_failure_time", "lead_time_hours",
+    "outcome_class",
+]
+
+
+def recreate_ml_output_tables():
+    spark.sql(
+        f"""
+        CREATE OR REPLACE TABLE {PREDICTION_TABLE} (
+          prediction_id BIGINT NOT NULL,
+          asset_id INT NOT NULL,
+          feature_time TIMESTAMP NOT NULL,
+          prediction_time TIMESTAMP NOT NULL,
+          model_name STRING NOT NULL,
+          model_version STRING NOT NULL,
+          forecast_horizon_hours INT NOT NULL,
+          failure_probability DOUBLE NOT NULL,
+          predicted_failure_mode_id INT,
+          remaining_useful_life_hours DOUBLE,
+          risk_level STRING,
+          recommended_action STRING,
+          threshold_used DOUBLE,
+          prediction_status STRING,
+          scored_at TIMESTAMP
+        ) USING DELTA
+        """
+    )
+    spark.sql(
+        f"""
+        CREATE OR REPLACE TABLE {OUTCOME_TABLE} (
+          prediction_id BIGINT NOT NULL,
+          evaluated_at TIMESTAMP NOT NULL,
+          horizon_end TIMESTAMP NOT NULL,
+          failure_observed BOOLEAN NOT NULL,
+          actual_machine_id INT,
+          actual_failure_time TIMESTAMP,
+          lead_time_hours DOUBLE,
+          outcome_class STRING NOT NULL
+        ) USING DELTA
+        """
+    )
+
+
+actual_prediction_columns = spark.table(PREDICTION_TABLE).columns
+actual_outcome_columns = spark.table(OUTCOME_TABLE).columns
+if (
+    actual_prediction_columns != EXPECTED_PREDICTION_COLUMNS
+    or actual_outcome_columns != EXPECTED_OUTCOME_COLUMNS
+):
+    if RECREATE_ML_OUTPUT_TABLES_ON_SCHEMA_MISMATCH:
+        print("Replacing obsolete model-output table schemas")
+        print(f"Old prediction columns: {actual_prediction_columns}")
+        print(f"Required prediction columns: {EXPECTED_PREDICTION_COLUMNS}")
+        recreate_ml_output_tables()
+    else:
+        raise RuntimeError(
+            "Model-output schema mismatch. Set "
+            "RECREATE_ML_OUTPUT_TABLES_ON_SCHEMA_MISMATCH = True or recreate "
+            f"{PREDICTION_TABLE} and {OUTCOME_TABLE} from ddl.sql. "
+            f"Actual prediction columns: {actual_prediction_columns}; "
+            f"required: {EXPECTED_PREDICTION_COLUMNS}."
+        )
 
 FEATURE_COLUMNS = [
     "telemetry_count",
@@ -467,8 +543,13 @@ if WRITE_BATCH_PREDICTIONS:
         F.lit(alert_threshold).cast("double").alias("threshold_used"),
         F.lit("active").alias("prediction_status"), F.current_timestamp().alias("scored_at"),
     )
-    if predictions.columns != spark.table(PREDICTION_TABLE).columns:
-        raise RuntimeError("Prediction output does not match maintenance_predictions DDL")
+    target_prediction_columns = spark.table(PREDICTION_TABLE).columns
+    if predictions.columns != target_prediction_columns:
+        raise RuntimeError(
+            "Prediction output schema mismatch after initialization. "
+            f"Generated columns: {predictions.columns}; "
+            f"target columns: {target_prediction_columns}."
+        )
     predictions.write.mode("append").insertInto(PREDICTION_TABLE)
     print(f"Wrote batch predictions from MLflow run {run_id}")
 
@@ -520,7 +601,12 @@ if EVALUATE_MATURE_PREDICTIONS:
         .when((F.col("failure_probability") < F.col("threshold_used")) & F.col("actual_failure_time").isNotNull(), "false_negative")
         .otherwise("true_negative").alias("outcome_class"),
     )
-    if outcomes.columns != spark.table(OUTCOME_TABLE).columns:
-        raise RuntimeError("Outcome output does not match maintenance_prediction_outcomes DDL")
+    target_outcome_columns = spark.table(OUTCOME_TABLE).columns
+    if outcomes.columns != target_outcome_columns:
+        raise RuntimeError(
+            "Outcome output schema mismatch after initialization. "
+            f"Generated columns: {outcomes.columns}; "
+            f"target columns: {target_outcome_columns}."
+        )
     outcomes.write.mode("append").insertInto(OUTCOME_TABLE)
     display(outcomes.groupBy("outcome_class").count())
