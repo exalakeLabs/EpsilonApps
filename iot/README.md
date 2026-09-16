@@ -81,7 +81,14 @@ The default live workload appends 100 million telemetry rows as 20 Delta
 commits, plus 10,000 failures in `machine_failures` with matching rows in
 `failure_details`. Fleet attributes remain stable for each machine while
 temperature, CPU load, network latency, and timestamps vary by reading. Rare
-metric spikes support anomaly and failure-prediction queries.
+metric spikes support anomaly and failure-prediction queries. By default,
+telemetry and failures are spread across the 90 days ending at run time so
+that 168-hour forecast labels have enough historical coverage to close.
+
+`EVENT_TIME_SPAN_DAYS` controls historical coverage. Set it to a value greater
+than `FORECAST_HORIZON_HOURS / 24`; 30 to 90 days is a practical minimum for
+chronological training and evaluation. Set it to `0` only for a live,
+forward-moving append workload that is not expected to train a model yet.
 
 For a smoke test, use:
 
@@ -91,6 +98,11 @@ TELEMETRY_BATCH_ROWS = 100_000
 FAILURE_ROWS = 100
 OUTPUT_PARTITIONS = 32
 ```
+
+That configuration validates ingestion but is generally too sparse for model
+training with 100,000 machines. For a smaller end-to-end ML test, also reduce
+`MACHINE_COUNT` to 10,000 and generate enough failures for every chronological
+split to contain positive and negative labels.
 
 Smaller telemetry batches create more Delta commits and are useful for testing
 transaction-log growth and concurrent readers. Larger batches reduce commit
@@ -127,7 +139,10 @@ predictive performance.
 
 At least two historical feature windows with closed 168-hour horizons are
 required. For meaningful chronological train, validation, and test periods,
-load telemetry spanning substantially more than seven days.
+load telemetry and failure events spanning substantially more than seven days.
+If the notebook reports insufficient closed windows, rerun the synthetic load
+generator with `EVENT_TIME_SPAN_DAYS = 90`, then rerun the training notebook
+from its feature-generation cell.
 
 ## Example reliability queries
 

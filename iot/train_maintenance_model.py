@@ -10,7 +10,7 @@
 # COMMAND ----------
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import mlflow
 import mlflow.xgboost
@@ -37,7 +37,7 @@ REGISTERED_MODEL_NAME = f"{CATALOG}.{SCHEMA}.maintenance_failure_xgboost"
 EXPERIMENT_NAME = "/Shared/iot-maintenance-xgboost"
 
 # Feature, label, and training configuration.
-FEATURE_WINDOW_HOURS = 1
+FEATURE_WINDOW_HOURS = 24
 FORECAST_HORIZON_HOURS = 168
 FAILURE_HISTORY_DAYS = 90
 MAX_LOCAL_TRAINING_ROWS = 1_000_000
@@ -256,6 +256,13 @@ features = (
     )
 )
 
+feature_diagnostics = features.agg(
+    F.min("feature_time").alias("earliest_feature_time"),
+    F.max("feature_time").alias("latest_feature_time"),
+    F.countDistinct("feature_time").alias("feature_window_count"),
+    F.count(F.when(F.col(LABEL_COLUMN).isNotNull(), 1)).alias("closed_snapshot_count"),
+).first()
+
 labelled_bounds = (
     features.where(F.col(LABEL_COLUMN).isNotNull())
     .agg(
@@ -265,8 +272,18 @@ labelled_bounds = (
     .first()
 )
 if labelled_bounds["min_epoch"] is None or labelled_bounds["max_epoch"] <= labelled_bounds["min_epoch"]:
+    latest_closed_feature_time = data_cutoff - timedelta(hours=FORECAST_HORIZON_HOURS)
     raise RuntimeError(
-        "At least two historical feature windows with closed forecast horizons are required"
+        "Insufficient closed historical feature windows. "
+        f"Observed feature times: {feature_diagnostics['earliest_feature_time']} through "
+        f"{feature_diagnostics['latest_feature_time']} "
+        f"({feature_diagnostics['feature_window_count']} distinct windows; "
+        f"{feature_diagnostics['closed_snapshot_count']} closed snapshots). "
+        f"Data cutoff: {data_cutoff}; a {FORECAST_HORIZON_HOURS}-hour forecast "
+        f"requires feature_time <= {latest_closed_feature_time}. "
+        "Load telemetry and failures spanning more than the forecast horizon. "
+        "For synthetic data, rerun generate_synthetic_load.py with "
+        "EVENT_TIME_SPAN_DAYS greater than FORECAST_HORIZON_HOURS / 24."
     )
 
 time_span = labelled_bounds["max_epoch"] - labelled_bounds["min_epoch"]
@@ -507,4 +524,3 @@ if EVALUATE_MATURE_PREDICTIONS:
         raise RuntimeError("Outcome output does not match maintenance_prediction_outcomes DDL")
     outcomes.write.mode("append").insertInto(OUTCOME_TABLE)
     display(outcomes.groupBy("outcome_class").count())
-

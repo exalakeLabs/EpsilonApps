@@ -8,7 +8,7 @@
 
 # COMMAND ----------
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from pyspark.sql import functions as F
 
@@ -26,7 +26,7 @@ TELEMETRY_BATCH_ROWS = 5_000_000
 FAILURE_ROWS = 10_000
 OUTPUT_PARTITIONS = 400
 
-# Synthetic fleet shape and sampling cadence.
+# Synthetic fleet shape and event-time coverage.
 CUSTOMER_COUNT = 1_000
 SITE_COUNT = 5_000
 MACHINE_COUNT = 100_000
@@ -35,12 +35,14 @@ ROOMS_PER_SITE = 20
 HARDWARE_CONFIG_COUNT = 25
 COMPONENTS_PER_ASSET = 6
 FAILURE_MODE_COUNT = 40
-EVENT_INTERVAL_SECONDS = 30
+EVENT_TIME_SPAN_DAYS = 90  # Spread each machine's readings over this history.
+LIVE_EVENT_INTERVAL_SECONDS = 30  # Used only when EVENT_TIME_SPAN_DAYS is 0.
 SEED = 42
 
-# Each run starts at the current UTC time. Override with a timezone-aware
-# datetime when repeatable event timestamps are required.
-RUN_START = datetime.now(timezone.utc).replace(microsecond=0)
+# Historical mode ends at the current UTC time. Set EVENT_TIME_SPAN_DAYS to 0
+# for a forward-moving live window beginning at RUN_END.
+RUN_END = datetime.now(timezone.utc).replace(microsecond=0)
+RUN_START = RUN_END - timedelta(days=EVENT_TIME_SPAN_DAYS)
 
 assert TOTAL_TELEMETRY_ROWS >= 0
 assert TELEMETRY_BATCH_ROWS > 0
@@ -52,12 +54,19 @@ assert MACHINE_COUNT > 0
 assert RACKS_PER_SITE > 0
 assert ROOMS_PER_SITE > 0
 assert HARDWARE_CONFIG_COUNT > 0
-assert EVENT_INTERVAL_SECONDS > 0
+assert EVENT_TIME_SPAN_DAYS >= 0
+assert LIVE_EVENT_INTERVAL_SECONDS > 0
 
 TELEMETRY_FQN = f"{CATALOG}.{SCHEMA}.{TELEMETRY_TABLE}"
 FAILURE_FQN = f"{CATALOG}.{SCHEMA}.{FAILURE_TABLE}"
 ENRICHED_FAILURE_FQN = f"{CATALOG}.{SCHEMA}.{ENRICHED_FAILURE_TABLE}"
 RUN_START_EPOCH_SECONDS = int(RUN_START.timestamp())
+SAMPLES_PER_MACHINE = max(1, (TOTAL_TELEMETRY_ROWS + MACHINE_COUNT - 1) // MACHINE_COUNT)
+EVENT_STEP_SECONDS = (
+    max(1, EVENT_TIME_SPAN_DAYS * 86_400 // SAMPLES_PER_MACHINE)
+    if EVENT_TIME_SPAN_DAYS > 0
+    else LIVE_EVENT_INTERVAL_SECONDS
+)
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 
 # COMMAND ----------
@@ -147,10 +156,10 @@ def telemetry_batch(batch_start, batch_rows):
     site_hash = positive_hash(F.col("site_id"))
     event_epoch = (
         F.lit(RUN_START_EPOCH_SECONDS)
-        + F.col("sample_sequence") * F.lit(EVENT_INTERVAL_SECONDS)
+        + F.col("sample_sequence") * F.lit(EVENT_STEP_SECONDS)
     )
-    daily_phase = (
-        F.col("sample_sequence") * F.lit(EVENT_INTERVAL_SECONDS * 2.0 * 3.141592653589793 / 86_400.0)
+    daily_phase = F.col("sample_sequence") * F.lit(
+        EVENT_STEP_SECONDS * 2.0 * 3.141592653589793 / 86_400.0
     )
 
     return base.select(
@@ -244,12 +253,10 @@ def failure_event_batch(row_count):
 
     # Spread failures across the same time horizon as the telemetry run. A
     # machine may fail more than once, which is useful for event-heavy tests.
-    samples_per_machine = max(
-        1, (TOTAL_TELEMETRY_ROWS + MACHINE_COUNT - 1) // MACHINE_COUNT
-    )
-    failure_window_seconds = samples_per_machine * EVENT_INTERVAL_SECONDS
+    failure_window_seconds = SAMPLES_PER_MACHINE * EVENT_STEP_SECONDS
     base = spark.range(row_count, numPartitions=min(OUTPUT_PARTITIONS, row_count))
     failure_hash = positive_hash(F.col("id"), F.lit("failure"))
+    failure_time_hash = positive_hash(F.col("id"), F.lit("failure_time"))
 
     return base.select(
         F.col("id"),
@@ -260,7 +267,7 @@ def failure_event_batch(row_count):
         F.timestamp_seconds(
             F.lit(RUN_START_EPOCH_SECONDS)
             + F.pmod(
-                F.floor(failure_hash / F.lit(MACHINE_COUNT)),
+                failure_time_hash,
                 F.lit(failure_window_seconds),
             )
         ).alias("failure_time"),
