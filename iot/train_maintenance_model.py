@@ -13,6 +13,7 @@ import math
 from datetime import datetime, timedelta, timezone
 
 import mlflow
+import mlflow.pyfunc
 import mlflow.xgboost
 import numpy as np
 import pandas as pd
@@ -449,6 +450,44 @@ mlflow.xgboost.autolog(log_models=False, log_datasets=True, silent=True)
 
 model = xgb.XGBClassifier(**XGB_PARAMS, scale_pos_weight=scale_pos_weight)
 
+
+class MaintenanceServingModel(mlflow.pyfunc.PythonModel):
+    """Serve calibrated model outputs instead of XGBoost's hard class labels."""
+
+    def __init__(self, classifier, alert_threshold):
+        self.classifier = classifier
+        self.alert_threshold = float(alert_threshold)
+
+    def predict(self, context, model_input, params=None):
+        frame = pd.DataFrame(model_input, columns=FEATURE_COLUMNS)
+        frame = frame[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        probability = self.classifier.predict_proba(frame)[:, 1].astype("float64")
+        threshold = self.alert_threshold
+        critical_threshold = max(0.85, threshold)
+
+        risk_level = np.select(
+            [
+                probability >= critical_threshold,
+                probability >= threshold,
+                probability >= threshold * 0.5,
+            ],
+            ["critical", "high", "medium"],
+            default="low",
+        )
+        recommended_action = np.select(
+            [probability >= critical_threshold, probability >= threshold],
+            ["stop_and_inspect", "schedule_maintenance"],
+            default="continue_monitoring",
+        )
+
+        return pd.DataFrame({
+            "failure_probability": probability,
+            "predicted_failure": (probability >= threshold).astype("int32"),
+            "risk_level": risk_level,
+            "recommended_action": recommended_action,
+            "threshold_used": np.full(len(frame), threshold, dtype="float64"),
+        })
+
 with mlflow.start_run(run_name="maintenance-failure-168h-xgboost") as active_run:
     model.fit(
         X_train,
@@ -488,18 +527,37 @@ with mlflow.start_run(run_name="maintenance-failure-168h-xgboost") as active_run
         "feature_count": len(FEATURE_COLUMNS),
     })
 
-    signature = infer_signature(X_train.head(100), model.predict_proba(X_train.head(100))[:, 1])
-    model_info = mlflow.xgboost.log_model(
-        xgb_model=model,
+    serving_model = MaintenanceServingModel(model, alert_threshold)
+    serving_input_example = X_train.head(5).copy()
+    serving_output_example = serving_model.predict(None, serving_input_example)
+    if (
+        len(serving_output_example) != len(serving_input_example)
+        or not serving_output_example["failure_probability"].between(0.0, 1.0).all()
+        or not np.isfinite(serving_output_example["failure_probability"]).all()
+    ):
+        raise RuntimeError(
+            "Serving smoke test failed: expected one finite probability in [0, 1] per input row"
+        )
+
+    signature = infer_signature(serving_input_example, serving_output_example)
+    model_info = mlflow.pyfunc.log_model(
+        python_model=serving_model,
         artifact_path="model",
         registered_model_name=REGISTERED_MODEL_NAME,
         signature=signature,
-        input_example=X_train.head(5),
-        model_format="json",
+        input_example=serving_input_example,
+        pip_requirements=[
+            f"mlflow=={mlflow.__version__}",
+            f"xgboost=={xgb.__version__}",
+            f"numpy=={np.__version__}",
+            f"pandas=={pd.__version__}",
+        ],
     )
     run_id = active_run.info.run_id
 
 print(f"Registered {REGISTERED_MODEL_NAME} from MLflow run {run_id}")
+print("Serving response preview")
+display(serving_output_example)
 display(spark.createDataFrame([(name, float(value)) for name, value in metrics.items()], "metric string, value double"))
 
 # COMMAND ----------

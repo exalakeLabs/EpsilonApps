@@ -144,7 +144,9 @@ next 168 hours. It performs the following workflow:
 5. Trains an imbalance-aware `XGBClassifier`, chooses an alert threshold on
    the validation period, and evaluates ROC AUC, PR AUC, precision, recall,
    calibration, and the confusion matrix on the test period.
-6. Logs the run and registers the model in Unity Catalog through MLflow.
+6. Logs the run and registers an MLflow serving wrapper in Unity Catalog. The
+   wrapper returns `failure_probability`, `predicted_failure`, `risk_level`,
+   `recommended_action`, and `threshold_used` for every input row.
 7. Scores the latest snapshot for every asset and appends the results to
    `maintenance_predictions`.
 8. Writes delayed ground-truth evaluation to
@@ -171,6 +173,32 @@ load telemetry and failure events spanning substantially more than seven days.
 If the notebook reports insufficient closed windows, rerun the synthetic load
 generator with `EVENT_TIME_SPAN_DAYS = 90`, then rerun the training notebook
 from its feature-generation cell.
+
+### Model serving response
+
+The registered model uses `predict_proba()` explicitly. A Databricks serving
+endpoint therefore returns probability and decision fields rather than the
+native XGBoost `predict()` output of only `0` or `1`. A successful response has
+this shape:
+
+```json
+{
+  "predictions": [
+    {
+      "failure_probability": 0.037,
+      "predicted_failure": 0,
+      "risk_level": "low",
+      "recommended_action": "continue_monitoring",
+      "threshold_used": 0.61
+    }
+  ]
+}
+```
+
+After rerunning the training notebook, update the serving endpoint to the newly
+registered model version, or confirm that its traffic configuration follows the
+new version. An endpoint pinned to an older version will continue returning the
+old array of hard class labels.
 
 ## Example reliability queries
 
