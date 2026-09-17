@@ -12,6 +12,16 @@
 
 # COMMAND ----------
 
+# MAGIC %sql
+# MAGIC TRUNCATE TABLE exalabs.iot.iot_sample_data;
+# MAGIC TRUNCATE TABLE exalabs.iot.machine_failures;
+# MAGIC TRUNCATE TABLE exalabs.iot.failure_details;
+# MAGIC TRUNCATE TABLE exalabs.iot.asset_feature_snapshots;
+# MAGIC TRUNCATE TABLE exalabs.iot.maintenance_predictions;
+# MAGIC TRUNCATE TABLE exalabs.iot.maintenance_prediction_outcomes;
+
+# COMMAND ----------
+
 from datetime import datetime, timezone
 
 from pyspark.sql import functions as F
