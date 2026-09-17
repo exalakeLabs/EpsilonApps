@@ -1,6 +1,7 @@
 # Databricks notebook source
 # /// script
 # [tool.databricks.environment]
+# base_environment = "databricks_ai_v5"
 # environment_version = "5"
 # ///
 # MAGIC %md
@@ -25,7 +26,7 @@ ENRICHED_FAILURE_TABLE = "failure_details"
 
 # Load profile. The default run appends 100 million telemetry rows in 20 Delta
 # commits, followed by 10,000 failure rows in one commit.
-TOTAL_TELEMETRY_ROWS = 100_000_000
+TOTAL_TELEMETRY_ROWS = 1_000_000_000
 TELEMETRY_BATCH_ROWS = 5_000_000
 FAILURE_ROWS = 10_000
 OUTPUT_PARTITIONS = 400
@@ -171,11 +172,9 @@ def failure_event_batch(row_count):
 # avoids duplicating telemetry rows when a machine has multiple failures.
 failure_batch = failure_event_batch(FAILURE_ROWS)
 if failure_batch is not None:
-    failure_batch = failure_batch.cache()
     failure_schedule_by_machine = (
         failure_batch.groupBy("machine_id")
         .agg(F.collect_list(F.unix_timestamp("failure_time")).alias("failure_epochs"))
-        .cache()
     )
 else:
     failure_schedule_by_machine = None
