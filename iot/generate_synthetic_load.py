@@ -383,3 +383,121 @@ summary = spark.createDataFrame(
     "table_name string, appended_rows long, delta_commits int, run_start timestamp",
 )
 display(summary)
+
+# COMMAND ----------
+
+# DBTITLE 1,List metric view measures, dimensions, and joins
+import yaml
+
+catalog = "exalabs"
+schema = "iot"
+
+# Check distinct table_type values for known metric views
+known_mvs = [
+    'asset_components_metric_view', 'asset_models_metric_view', 'crispr',
+    'customers_industry', 'customers_metric_view', 'failure_details_metric_view',
+    'failures', 'topassets'
+]
+
+types_df = spark.sql(f"""
+    SELECT table_name, table_type
+    FROM {catalog}.information_schema.tables
+    WHERE table_schema = '{schema}'
+      AND table_name IN ({','.join(f"'{n}'" for n in known_mvs)})
+""")
+display(types_df)
+
+# Use the actual table_type value from info schema
+type_rows = types_df.select("table_type").distinct().collect()
+metric_type = type_rows[0][0] if type_rows else 'VIEW'
+print(f"Metric view table_type = '{metric_type}'")
+
+# Now find all metric views
+metric_views = (
+    spark.sql(f"""
+        SELECT table_name
+        FROM {catalog}.information_schema.tables
+        WHERE table_schema = '{schema}'
+          AND table_type = '{metric_type}'
+        ORDER BY table_name
+    """)
+    .collect()
+)
+
+print(f"Found {len(metric_views)} metric views in {catalog}.{schema}\n")
+
+for row in metric_views:
+    mv_name = row.table_name
+    fqn = f"{catalog}.{schema}.{mv_name}"
+    print(f"{'=' * 60}")
+    print(f"Metric View: {fqn}")
+    print(f"{'=' * 60}")
+
+    # Get the YAML definition
+    ddl_rows = spark.sql(f"SHOW CREATE TABLE {fqn}").collect()
+    ddl = ddl_rows[0][0] if ddl_rows else ""
+
+    # Extract YAML between $$ delimiters
+    yaml_str = None
+    if "$$" in ddl:
+        parts = ddl.split("$$")
+        if len(parts) >= 3:
+            yaml_str = parts[1].strip()
+
+    if yaml_str:
+        try:
+            defn = yaml.safe_load(yaml_str)
+        except Exception as e:
+            print(f"  (YAML parse error: {e})")
+            continue
+
+        # Source
+        source = defn.get("source", "(unknown)")
+        print(f"  Source: {source.strip() if isinstance(source, str) else source}")
+
+        # Joins
+        joins = defn.get("joins", [])
+        if joins:
+            print(f"  Joins ({len(joins)}):")
+            for j in joins:
+                j_name = j.get("name", "?")
+                j_src = j.get("source", "?")
+                j_on = j.get("on", j.get("using", "?"))
+                print(f"    - {j_name}: {j_src}  ON {j_on}")
+        else:
+            print("  Joins: (none)")
+
+        # Dimensions / fields
+        dims = defn.get("dimensions", defn.get("fields", []))
+        if dims:
+            print(f"  Dimensions ({len(dims)}):")
+            for d in dims:
+                name = d.get("name", "(wildcard)")
+                expr = d.get("expr", "")
+                comment = d.get("comment", "")
+                suffix = f"  -- {comment}" if comment else ""
+                print(f"    - {name}: {expr}{suffix}")
+        else:
+            print("  Dimensions: (none)")
+
+        # Measures
+        measures = defn.get("measures", [])
+        if measures:
+            print(f"  Measures ({len(measures)}):")
+            for m in measures:
+                name = m.get("name", "(wildcard)")
+                expr = m.get("expr", "")
+                comment = m.get("comment", "")
+                suffix = f"  -- {comment}" if comment else ""
+                print(f"    - {name}: {expr}{suffix}")
+        else:
+            print("  Measures: (none)")
+
+        # Filter
+        filt = defn.get("filter")
+        if filt:
+            print(f"  Filter: {filt}")
+    else:
+        print("  (No YAML definition found in DDL)")
+
+    print()
