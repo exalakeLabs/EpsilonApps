@@ -10,6 +10,7 @@ load testing and reliability analytics such as MTBF, MTTR, and availability.
 | File | Purpose |
 | --- | --- |
 | `ddl.sql` | Creates the schema and all 21 telemetry, asset, maintenance, feature, prediction, and outcome tables. |
+| `entity_relationship_diagram.png` | Visualizes the logical relationships among the 21 tables defined in `ddl.sql`. |
 | `generate_maintenance_data.py` | Creates a consistent historical baseline for the maintenance model. |
 | `generate_synthetic_load.py` | Repeatedly appends telemetry and new failure events for load testing. |
 | `train_maintenance_model.py` | Builds point-in-time features, trains and registers XGBoost, scores assets, and evaluates mature predictions. |
@@ -36,6 +37,14 @@ downtime, severity, and impact using `(machine_id, failure_time)` as its key.
 All generated telemetry `machine_id` values correspond to `assets.asset_id`.
 Installed components, sensors, work orders, actions, and predictions also use
 keys from the same generated fleet.
+
+## Entity relationship diagram
+
+![IoT predictive-maintenance entity relationship diagram](entity_relationship_diagram.png)
+
+The DDL does not declare physical foreign-key constraints. The diagram shows
+logical relationships inferred from matching identifiers, composite event keys,
+and the way the generation and training notebooks use the tables.
 
 ## Setup and execution order
 
