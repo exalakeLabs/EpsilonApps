@@ -270,3 +270,35 @@ ORDER BY mean_predicted_probability DESC;
 The synthetic data is intended for engineering and demonstration workloads.
 It should not be used to validate the statistical performance of a real
 predictive-maintenance model.
+
+## Prefetch predictions from the deployed gamma endpoint
+
+Import `prefetch_maintenance_predictions.py` as a Databricks source notebook and
+run it on compute with access to `exalabs.iot` and permission to invoke the
+`gamma` serving endpoint. Supply `DATABRICKS_TOKEN` through a secret-backed
+compute environment variable; do not paste credentials into the notebook.
+Run the feature-generation cells of `train_maintenance_model.py` first if
+snapshots are missing or outdated. No retraining is needed for this prefetch.
+
+The notebook sends the latest available snapshot for each asset to the deployed
+endpoint in batches of 256, using the exact 21 training features and numeric
+cleanup. It writes `exalabs.iot.asset_maintenance_prediction_cache`, with one row
+for every `assets.asset_id`, including `failure_probability`, `predicted_failure`,
+`risk_level`, `recommended_action`, and the endpoint's `threshold_used`.
+Assets without snapshots receive `prediction_status = missing_features` and
+null model outputs. Scores whose 168-hour horizon has ended receive
+`prediction_status = expired`; re-scoring old features does not renew that
+horizon. This assumes gamma serves the repository's 168-hour model wrapper.
+
+Consumers can left join the cache to `assets` using `asset_id`. Only include
+`prediction_status = scored` rows whose `feature_time + INTERVAL 168 HOURS` is
+still in the future in current-risk summaries. The endpoint name is recorded as
+provenance; an endpoint can change model versions between invocations, so pin
+its deployed model during a refresh when version consistency is required.
+
+All endpoint calls and coverage validation finish before the Delta cache is
+atomically replaced. Invocation errors preserve the previous cache. This is a
+current-state cache, separate from the historical `maintenance_predictions`
+table and its outcome evaluator. Schedule the notebook as a Databricks job if
+periodic refresh is needed. The driver holds compact feature batches and output
+rows, never raw telemetry; provision driver memory for the asset count.
