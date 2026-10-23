@@ -1,7 +1,11 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 """Prefetch gamma classifications into a one-row-per-asset Delta cache.
 
-Run on Databricks with DATABRICKS_TOKEN supplied through the compute environment.
+Run on Databricks with  supplied through the compute environment.
 The complete cache is replaced only after every endpoint batch succeeds.
 """
 import math
@@ -64,9 +68,7 @@ def score_batch(session, rows):
 
 
 def prefetch(spark):
-    token = os.environ.get("DATABRICKS_TOKEN")
-    if not token:
-        raise RuntimeError("Set DATABRICKS_TOKEN in the Databricks compute environment using a secret reference")
+    token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
     spark.conf.set("spark.sql.session.timeZone", "UTC")
     assets = spark.table(f"{NAMESPACE}.assets").select("asset_id").cache()
     if assets.where("asset_id IS NULL").take(1) or assets.groupBy("asset_id").count().where("count > 1").take(1):
@@ -125,3 +127,9 @@ def prefetch(spark):
 
 if __name__ == "__main__":
     prefetch(spark)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from exalabs.iot.asset_maintenance_prediction_cache 
+# MAGIC
