@@ -1,0 +1,7 @@
+credentials.json
+tokens.json
+data-range.json
+readings.json
+status.json
+*.log
+__pycache__/

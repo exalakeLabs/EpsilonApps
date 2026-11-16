@@ -1,0 +1,12 @@
+# Source: https://staging.sigmacomputing.io/papercranestaging
+# Target: https://staging.sigmacomputing.io/papercranestaging-exalabs
+# base_url is the API host for the environment, NOT the app URL. Confirm it in
+# Administration > Developer Access of each org.
+source_base_url = "https://api.staging.sigmacomputing.io"
+target_base_url = "https://api.staging.sigmacomputing.io"
+
+# Prefer env vars: TF_VAR_source_client_id, TF_VAR_source_client_secret,
+# TF_VAR_target_client_id, TF_VAR_target_client_secret
+
+# workspace_include = ["Analytics"]
+# workspace_exclude = ["Sandbox"]
