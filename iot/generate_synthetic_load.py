@@ -26,9 +26,9 @@ ENRICHED_FAILURE_TABLE = "failure_details"
 
 # Load profile. The default run appends 100 million telemetry rows in 20 Delta
 # commits, followed by 10,000 failure rows in one commit.
-TOTAL_TELEMETRY_ROWS = 1_000_000_000
-TELEMETRY_BATCH_ROWS = 5_000_000
-FAILURE_ROWS = 10_000
+TOTAL_TELEMETRY_ROWS = 10_000_000
+TELEMETRY_BATCH_ROWS = 1_000_000
+FAILURE_ROWS = 1_000
 OUTPUT_PARTITIONS = 400
 
 # Synthetic fleet shape and event-time coverage.
@@ -501,3 +501,8 @@ for row in metric_views:
         print("  (No YAML definition found in DDL)")
 
     print()
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select count(*) from exalabs.iot.iot_sample_data;

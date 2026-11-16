@@ -577,18 +577,11 @@ if WRITE_BATCH_PREDICTIONS:
         .select("asset_id", "feature_time", *FEATURE_COLUMNS)
     )
 
-    scoring_schema = "asset_id int, feature_time timestamp, failure_probability double"
-
-    def score_partitions(iterator):
-        for batch in iterator:
-            model_input = batch[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0)
-            yield pd.DataFrame({
-                "asset_id": batch["asset_id"].astype("int32"),
-                "feature_time": batch["feature_time"],
-                "failure_probability": model.predict_proba(model_input)[:, 1].astype("float64"),
-            })
-
-    scored = latest_features.mapInPandas(score_partitions, scoring_schema)
+    latest_pdf = latest_features.toPandas()
+    model_input = latest_pdf[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    latest_pdf["failure_probability"] = model.predict_proba(model_input)[:, 1].astype("float64")
+    latest_pdf["asset_id"] = latest_pdf["asset_id"].astype("int32")
+    scored = spark.createDataFrame(latest_pdf[["asset_id", "feature_time", "failure_probability"]])
     predictions = scored.select(
         F.xxhash64("asset_id", "feature_time", F.lit(run_id)).cast("bigint").alias("prediction_id"),
         "asset_id", "feature_time", F.current_timestamp().alias("prediction_time"),
