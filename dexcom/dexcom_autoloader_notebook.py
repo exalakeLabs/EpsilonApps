@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # Dexcom EGV Auto Loader -> `exalabs.dexcom.egv_readings`
 # MAGIC Ingests Dexcom JSON files landing in `/Volumes/exalabs/dexcom/uploads/` (written by `dexcom_fetch.py`
