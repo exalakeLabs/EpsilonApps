@@ -37,13 +37,16 @@ spark.sql(f"CREATE TABLE IF NOT EXISTS {STATE} (refresh_token STRING, updated_at
 
 # COMMAND ----------
 
-import json, urllib.parse, urllib.request
+import json, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 
 def http(url, data=None, headers=None):
     req = urllib.request.Request(url, data=data, headers=headers or {})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} from {url.split('?')[0]}: {e.read().decode()[:500]}") from None
 
 def get_access_token():
     """Exchange the stored refresh token for an access token and persist the rotated refresh token."""
@@ -52,8 +55,9 @@ def get_access_token():
     body = urllib.parse.urlencode({
         "client_id": dbutils.secrets.get(SCOPE, "client_id"),
         "client_secret": dbutils.secrets.get(SCOPE, "client_secret"),
-        "refresh_token": refresh,
+        "refresh_token": refresh.strip(),
         "grant_type": "refresh_token",
+        "redirect_uri": "http://localhost:8080/callback",  # must match the registered redirect URI
     }).encode()
     tok = http(BASE + "/v3/oauth2/token", body, {"Content-Type": "application/x-www-form-urlencoded"})
     if tok.get("refresh_token"):
