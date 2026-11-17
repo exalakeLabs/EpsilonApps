@@ -5,3 +5,6 @@ readings.json
 status.json
 *.log
 __pycache__/
+export/
+.fetch_state.json
+.pushed.json

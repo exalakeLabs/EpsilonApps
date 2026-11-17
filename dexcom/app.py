@@ -85,6 +85,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             except Exception as e:
+                try: print('Dexcom error at', stage, getattr(e, 'code', None), e.read().decode()[:500], flush=True)
+                except Exception: print('Dexcom error at', stage, repr(e), flush=True)
                 status.update(connected=False, stage=stage, error=type(e).__name__, http_status=getattr(e, 'code', None))
                 save('status.json', status)
                 return self.respond('Connection test failed: ' + html.escape(type(e).__name__) + '. See /status for status.', 502)
