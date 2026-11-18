@@ -1,0 +1,50 @@
+{
+  "scenarios": [
+    {
+      "id": "sales-overview",
+      "title": "Sales Overview",
+      "summary": "A secure, JWT-signed workbook embed. Replace the URL with a workbook from your org.",
+      "auth": "secure",
+      "embedUrl": "https://app.sigmacomputing.com/<org-slug>/workbook/<workbook-name>-<workbook-id>"
+    },
+    {
+      "id": "public-demo",
+      "title": "Public Embed",
+      "summary": "A public-access embed that needs no signing. Useful for a first smoke test.",
+      "auth": "public",
+      "embedUrl": "https://app.sigmacomputing.com/embed/<public-embed-id>"
+    }
+  ],
+  "personas": [
+    {
+      "id": "emea-manager",
+      "label": "Maria (EMEA Manager)",
+      "email": "maria@example.com",
+      "firstName": "Maria",
+      "lastName": "Keller",
+      "accountType": "Pro",
+      "teams": ["EMEA Sales"],
+      "userAttributes": { "region": "EMEA", "tenant": "acme-emea" }
+    },
+    {
+      "id": "na-analyst",
+      "label": "Jordan (NA Analyst)",
+      "email": "jordan@example.com",
+      "firstName": "Jordan",
+      "lastName": "Lee",
+      "accountType": "View",
+      "teams": ["NA Sales"],
+      "userAttributes": { "region": "NA", "tenant": "acme-na" }
+    },
+    {
+      "id": "exec",
+      "label": "Sam (Executive)",
+      "email": "sam@example.com",
+      "firstName": "Sam",
+      "lastName": "Okafor",
+      "accountType": "View",
+      "teams": ["Leadership"],
+      "userAttributes": { "region": "ALL", "tenant": "acme-global" }
+    }
+  ]
+}
